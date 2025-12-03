@@ -150,45 +150,49 @@ export function useExpenseStore() {
       const monthKey = getMonthKey(projectionDate);
       const monthData = monthlyData[monthKey] || createDefaultMonthData();
 
-      // Calculate total expenses exactly as entered for this month, filtering by startDate
+      // Calculate total expenses and revenues based on transaction types
       let totalExpenses = 0;
+      let totalRevenue = 0;
+
       monthData.expenses.forEach(expense => {
-        if (!expense.startDate) {
-          // If no start date specified, include all expenses
-          totalExpenses += expense.value;
-        } else {
-          const expenseStartDate = new Date(expense.startDate + '-01');
-          if (projectionDate >= expenseStartDate) {
+        // Check if transaction should be included based on start date
+        let shouldInclude = true;
+        if (expense.startDate) {
+          const transactionStartDate = new Date(expense.startDate + '-01');
+          if (projectionDate < transactionStartDate) {
+            shouldInclude = false;
+          }
+        }
+
+        if (shouldInclude) {
+          if (expense.type === 'expense') {
             totalExpenses += expense.value;
+          } else if (expense.type === 'income') {
+            totalRevenue += expense.value;
           }
         }
       });
 
-      // Calculate rental revenue exactly as configured for this month
-      let rentalRevenue = 0;
+      // Also include legacy rental income (if still configured)
       const rentalIncomeData = monthData.rentalIncome;
-
       if (rentalIncomeData.isActive && rentalIncomeData.value > 0) {
-        // Check contract constraints
         if (rentalIncomeData.contractDuration && rentalIncomeData.contractStartDate) {
           const contractStart = new Date(rentalIncomeData.contractStartDate + '-01');
           const contractEnd = new Date(contractStart);
           contractEnd.setMonth(contractStart.getMonth() + rentalIncomeData.contractDuration);
 
-          // Check if projection date is within contract period
           if (projectionDate >= contractStart && projectionDate < contractEnd) {
-            rentalRevenue = rentalIncomeData.value;
+            totalRevenue += rentalIncomeData.value;
           }
         } else if (rentalIncomeData.contractDuration === undefined) {
-          // Indefinite contract - always show revenue for months if configured
-          rentalRevenue = rentalIncomeData.value;
+          totalRevenue += rentalIncomeData.value;
         }
       }
 
       projections.push({
         month: format(projectionDate, 'MMM'), // Só mês, sem ano
         expenses: totalExpenses,
-        revenue: rentalRevenue,
+        revenue: totalRevenue,
         date: projectionDate,
       });
     }

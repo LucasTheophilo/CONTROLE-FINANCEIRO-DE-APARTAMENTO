@@ -18,6 +18,7 @@ export interface Expense {
   totalInstallments?: number;
   currentInstallment?: number;
   parentId?: string; // Links installments to the original expense
+  type: 'expense' | 'income'; // Novo campo para distinguir
 }
 
 export interface RentalIncome {

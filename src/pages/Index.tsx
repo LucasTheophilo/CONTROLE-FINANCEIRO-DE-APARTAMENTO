@@ -1,9 +1,8 @@
 import { useExpenseStore } from '@/hooks/useExpenseStore';
 import { SummaryCard } from '@/components/SummaryCard';
 import { OwnerCard } from '@/components/OwnerCard';
-import { ExpenseItem } from '@/components/ExpenseItem';
-import { AddExpenseDialog } from '@/components/AddExpenseDialog';
-import { RentalIncomeItem } from '@/components/RentalIncomeItem';
+import { TransactionItem } from '@/components/TransactionItem';
+import { AddTransactionDialog } from '@/components/AddExpenseDialog';
 import { MonthSelector } from '@/components/MonthSelector';
 import ProjectionChart from '@/components/ProjectionChart';
 import ThemeToggle from '@/components/ThemeToggle';
@@ -104,14 +103,6 @@ const Index = () => {
               />
             </section>
 
-            {/* Rental Income */}
-            <section>
-              <RentalIncomeItem
-                rentalIncome={rentalIncome}
-                onUpdate={setRentalIncome}
-              />
-            </section>
-
             {/* Owner Balances */}
             <section>
               <div className="flex items-center justify-between mb-4">
@@ -133,17 +124,17 @@ const Index = () => {
               </div>
             </section>
 
-            {/* Expenses List */}
+            {/* Transactions List */}
             <section>
               <div className="flex items-center justify-between mb-4">
                 <h2 className="text-lg font-semibold">Lançamentos</h2>
-                <AddExpenseDialog onAdd={addExpense} />
+                <AddTransactionDialog onAdd={addExpense} />
               </div>
               <div className="space-y-3">
                 {expenses.map((expense) => (
-                  <ExpenseItem
+                  <TransactionItem
                     key={expense.id}
-                    expense={expense}
+                    transaction={expense}
                     onUpdate={updateExpense}
                     onDelete={deleteExpense}
                   />
@@ -152,8 +143,8 @@ const Index = () => {
 
               {expenses.length === 0 && (
                 <div className="text-center py-12 bg-card rounded-xl border border-dashed border-border">
-                  <p className="text-muted-foreground">Nenhuma despesa cadastrada</p>
-                  <p className="text-sm text-muted-foreground mt-1">Clique em "Nova Despesa" para adicionar</p>
+                  <p className="text-muted-foreground">Nenhum lançamento cadastrado</p>
+                  <p className="text-sm text-muted-foreground mt-1">Clique em "Adicionar Despesa ou Receita" para começar</p>
                 </div>
               )}
             </section>
