@@ -1,4 +1,7 @@
 import { useExpenseStore } from '@/hooks/useExpenseStore';
+import { useAuth } from '@/contexts/AuthContext';
+import { useNavigate } from 'react-router-dom';
+import { useEffect } from 'react';
 import { SummaryCard } from '@/components/SummaryCard';
 import { OwnerCard } from '@/components/OwnerCard';
 import { TransactionItem } from '@/components/TransactionItem';
@@ -7,10 +10,14 @@ import { MonthSelector } from '@/components/MonthSelector';
 import ProjectionChart from '@/components/ProjectionChart';
 import ThemeToggle from '@/components/ThemeToggle';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { Building2, Wallet, TrendingDown, BarChart3 } from 'lucide-react';
+import { Button } from '@/components/ui/button';
+import { Building2, Wallet, TrendingDown, BarChart3, LogOut, Loader2 } from 'lucide-react';
 import { useMemo } from 'react';
 
 const Index = () => {
+  const { user, loading: authLoading, signOut } = useAuth();
+  const navigate = useNavigate();
+  
   const {
     owners,
     expenses,
@@ -27,7 +34,14 @@ const Index = () => {
     calculateTotalExpenses,
     calculateOwnerBalances,
     calculateProjections,
+    loading: dataLoading,
   } = useExpenseStore();
+
+  useEffect(() => {
+    if (!authLoading && !user) {
+      navigate('/auth');
+    }
+  }, [user, authLoading, navigate]);
 
   const totalExpenses = calculateTotalExpenses();
   const ownerBalances = calculateOwnerBalances();
@@ -41,6 +55,23 @@ const Index = () => {
       currency: 'BRL',
     }).format(value);
   };
+
+  const handleSignOut = async () => {
+    await signOut();
+    navigate('/auth');
+  };
+
+  if (authLoading || dataLoading) {
+    return (
+      <div className="min-h-screen bg-background flex items-center justify-center">
+        <Loader2 className="h-8 w-8 animate-spin text-primary" />
+      </div>
+    );
+  }
+
+  if (!user) {
+    return null;
+  }
 
   return (
     <div className="min-h-screen bg-background">
@@ -57,7 +88,12 @@ const Index = () => {
                 <p className="text-sm text-muted-foreground">Gerenciamento do apartamento</p>
               </div>
             </div>
-            <ThemeToggle />
+            <div className="flex items-center gap-2">
+              <ThemeToggle />
+              <Button variant="ghost" size="icon" onClick={handleSignOut} title="Sair">
+                <LogOut className="h-5 w-5" />
+              </Button>
+            </div>
           </div>
         </div>
       </header>
