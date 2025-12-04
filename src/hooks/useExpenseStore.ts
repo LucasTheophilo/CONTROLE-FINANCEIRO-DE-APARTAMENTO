@@ -1,12 +1,9 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import { Owner, Expense, RentalIncome, OwnerBalance, MonthlyData } from '@/types/expense';
 import { format } from 'date-fns';
-
-const defaultOwners: Owner[] = [
-  { id: '1', name: 'Proprietário 1', percentage: 33.33, imageUrl: undefined },
-  { id: '2', name: 'Proprietário 2', percentage: 33.33, imageUrl: undefined },
-  { id: '3', name: 'Proprietário 3', percentage: 33.34, imageUrl: undefined },
-];
+import { supabase } from '@/integrations/supabase/client';
+import { useAuth } from '@/contexts/AuthContext';
+import { toast } from 'sonner';
 
 const getMonthKey = (date: Date) => format(date, 'yyyy-MM');
 
@@ -23,19 +20,137 @@ const createDefaultMonthData = (): MonthlyData => ({
   },
 });
 
+const defaultOwners: Owner[] = [
+  { id: '1', name: 'Proprietário 1', percentage: 33.33, imageUrl: undefined },
+  { id: '2', name: 'Proprietário 2', percentage: 33.33, imageUrl: undefined },
+  { id: '3', name: 'Proprietário 3', percentage: 33.34, imageUrl: undefined },
+];
+
 export function useExpenseStore() {
+  const { user } = useAuth();
   const [owners, setOwners] = useState<Owner[]>(defaultOwners);
   const [currentMonth, setCurrentMonth] = useState<Date>(new Date());
   const [selectedYear, setSelectedYear] = useState<number>(() => new Date().getFullYear());
-  const [monthlyData, setMonthlyData] = useState<Record<string, MonthlyData>>(() => {
-    const key = getMonthKey(new Date());
-    return {
-      [key]: {
-        expenses: [],
-        rentalIncome: { value: 0, isActive: false },
-      },
-    };
-  });
+  const [monthlyData, setMonthlyData] = useState<Record<string, MonthlyData>>({});
+  const [loading, setLoading] = useState(true);
+
+  // Load owners from database
+  const loadOwners = useCallback(async () => {
+    if (!user) return;
+    
+    const { data, error } = await supabase
+      .from('owners')
+      .select('*')
+      .eq('user_id', user.id)
+      .order('position');
+    
+    if (error) {
+      console.error('Error loading owners:', error);
+      return;
+    }
+    
+    if (data && data.length > 0) {
+      setOwners(data.map(o => ({
+        id: o.id,
+        name: o.name,
+        percentage: Number(o.percentage),
+        imageUrl: o.image_url || undefined
+      })));
+    } else {
+      // Create default owners for new user
+      const ownersToCreate = defaultOwners.map((o, index) => ({
+        user_id: user.id,
+        name: o.name,
+        percentage: o.percentage,
+        position: index
+      }));
+      
+      const { data: newOwners, error: createError } = await supabase
+        .from('owners')
+        .insert(ownersToCreate)
+        .select();
+      
+      if (createError) {
+        console.error('Error creating owners:', createError);
+      } else if (newOwners) {
+        setOwners(newOwners.map(o => ({
+          id: o.id,
+          name: o.name,
+          percentage: Number(o.percentage),
+          imageUrl: o.image_url || undefined
+        })));
+      }
+    }
+  }, [user]);
+
+  // Load transactions and rental income from database
+  const loadData = useCallback(async () => {
+    if (!user) return;
+    
+    setLoading(true);
+    
+    const { data: transactions, error: transError } = await supabase
+      .from('transactions')
+      .select('*')
+      .eq('user_id', user.id);
+    
+    const { data: rentalData, error: rentalError } = await supabase
+      .from('rental_income')
+      .select('*')
+      .eq('user_id', user.id);
+    
+    if (transError || rentalError) {
+      console.error('Error loading data:', transError || rentalError);
+      setLoading(false);
+      return;
+    }
+    
+    const newMonthlyData: Record<string, MonthlyData> = {};
+    
+    // Process transactions
+    transactions?.forEach(t => {
+      if (!newMonthlyData[t.month_key]) {
+        newMonthlyData[t.month_key] = createDefaultMonthData();
+      }
+      newMonthlyData[t.month_key].expenses.push({
+        id: t.id,
+        name: t.name,
+        value: Number(t.value),
+        category: t.category as Expense['category'],
+        periodicity: t.periodicity as Expense['periodicity'],
+        type: t.type as 'expense' | 'income',
+        dueDay: t.due_day || undefined,
+        totalInstallments: t.total_installments || 1,
+        currentInstallment: t.current_installment || 1,
+        parentId: t.parent_id || undefined
+      });
+    });
+    
+    // Process rental income
+    rentalData?.forEach(r => {
+      if (!newMonthlyData[r.month_key]) {
+        newMonthlyData[r.month_key] = createDefaultMonthData();
+      }
+      newMonthlyData[r.month_key].rentalIncome = {
+        id: r.id,
+        name: r.name || 'Receita de Aluguel',
+        value: Number(r.value),
+        isActive: r.is_active,
+        contractDuration: r.contract_duration || undefined,
+        contractStartDate: r.contract_start_date || undefined
+      };
+    });
+    
+    setMonthlyData(newMonthlyData);
+    setLoading(false);
+  }, [user]);
+
+  useEffect(() => {
+    if (user) {
+      loadOwners();
+      loadData();
+    }
+  }, [user, loadOwners, loadData]);
 
   const getCurrentMonthData = useCallback((): MonthlyData => {
     const key = getMonthKey(currentMonth);
@@ -45,43 +160,115 @@ export function useExpenseStore() {
   const expenses = getCurrentMonthData().expenses;
   const rentalIncome = getCurrentMonthData().rentalIncome;
 
-  const updateOwner = useCallback((id: string, updates: Partial<Owner>) => {
+  const updateOwner = useCallback(async (id: string, updates: Partial<Owner>) => {
+    if (!user) return;
+    
+    const dbUpdates: Record<string, unknown> = {};
+    if (updates.name !== undefined) dbUpdates.name = updates.name;
+    if (updates.percentage !== undefined) dbUpdates.percentage = updates.percentage;
+    if (updates.imageUrl !== undefined) dbUpdates.image_url = updates.imageUrl;
+    
+    const { error } = await supabase
+      .from('owners')
+      .update(dbUpdates)
+      .eq('id', id)
+      .eq('user_id', user.id);
+    
+    if (error) {
+      toast.error('Erro ao atualizar proprietário');
+      return;
+    }
+    
     setOwners(prev => prev.map(o => o.id === id ? { ...o, ...updates } : o));
-  }, []);
+  }, [user]);
 
-  const addExpense = useCallback((expense: Omit<Expense, 'id'>) => {
+  const addExpense = useCallback(async (expense: Omit<Expense, 'id'>) => {
+    if (!user) return;
+    
     const totalInstallments = expense.totalInstallments || 1;
     const parentId = Date.now().toString();
     
+    const transactionsToInsert = [];
+    
+    for (let i = 0; i < totalInstallments; i++) {
+      const installmentDate = new Date(currentMonth);
+      installmentDate.setMonth(installmentDate.getMonth() + i);
+      const monthKey = getMonthKey(installmentDate);
+      
+      transactionsToInsert.push({
+        user_id: user.id,
+        name: expense.name,
+        value: expense.value,
+        category: expense.category,
+        periodicity: expense.periodicity,
+        type: expense.type || 'expense',
+        due_day: expense.dueDay,
+        total_installments: totalInstallments,
+        current_installment: i + 1,
+        parent_id: totalInstallments > 1 ? parentId : null,
+        month_key: monthKey
+      });
+    }
+    
+    const { data, error } = await supabase
+      .from('transactions')
+      .insert(transactionsToInsert)
+      .select();
+    
+    if (error) {
+      toast.error('Erro ao adicionar lançamento');
+      return;
+    }
+    
+    // Update local state
     setMonthlyData(prev => {
-      const newMonthlyData = { ...prev };
+      const newData = { ...prev };
       
-      for (let i = 0; i < totalInstallments; i++) {
-        // Calculate the month for this installment
-        const installmentDate = new Date(currentMonth);
-        installmentDate.setMonth(installmentDate.getMonth() + i);
-        const key = getMonthKey(installmentDate);
-        
-        const newExpense: Expense = {
-          ...expense,
-          id: `${parentId}-${i}`,
-          currentInstallment: i + 1,
-          totalInstallments,
-          parentId: totalInstallments > 1 ? parentId : undefined,
-        };
-        
-        const existingData = newMonthlyData[key] || createDefaultMonthData();
-        newMonthlyData[key] = {
-          ...existingData,
-          expenses: [...existingData.expenses, newExpense],
-        };
-      }
+      data?.forEach(t => {
+        if (!newData[t.month_key]) {
+          newData[t.month_key] = createDefaultMonthData();
+        }
+        newData[t.month_key].expenses.push({
+          id: t.id,
+          name: t.name,
+          value: Number(t.value),
+          category: t.category as Expense['category'],
+          periodicity: t.periodicity as Expense['periodicity'],
+          type: t.type as 'expense' | 'income',
+          dueDay: t.due_day || undefined,
+          totalInstallments: t.total_installments || 1,
+          currentInstallment: t.current_installment || 1,
+          parentId: t.parent_id || undefined
+        });
+      });
       
-      return newMonthlyData;
+      return newData;
     });
-  }, [currentMonth]);
+    
+    toast.success('Lançamento adicionado!');
+  }, [user, currentMonth]);
 
-  const updateExpense = useCallback((id: string, updates: Partial<Expense>) => {
+  const updateExpense = useCallback(async (id: string, updates: Partial<Expense>) => {
+    if (!user) return;
+    
+    const dbUpdates: Record<string, unknown> = {};
+    if (updates.name !== undefined) dbUpdates.name = updates.name;
+    if (updates.value !== undefined) dbUpdates.value = updates.value;
+    if (updates.category !== undefined) dbUpdates.category = updates.category;
+    if (updates.periodicity !== undefined) dbUpdates.periodicity = updates.periodicity;
+    if (updates.type !== undefined) dbUpdates.type = updates.type;
+    
+    const { error } = await supabase
+      .from('transactions')
+      .update(dbUpdates)
+      .eq('id', id)
+      .eq('user_id', user.id);
+    
+    if (error) {
+      toast.error('Erro ao atualizar lançamento');
+      return;
+    }
+    
     const key = getMonthKey(currentMonth);
     setMonthlyData(prev => ({
       ...prev,
@@ -90,9 +277,22 @@ export function useExpenseStore() {
         expenses: (prev[key]?.expenses || []).map(e => e.id === id ? { ...e, ...updates } : e),
       },
     }));
-  }, [currentMonth]);
+  }, [user, currentMonth]);
 
-  const deleteExpense = useCallback((id: string) => {
+  const deleteExpense = useCallback(async (id: string) => {
+    if (!user) return;
+    
+    const { error } = await supabase
+      .from('transactions')
+      .delete()
+      .eq('id', id)
+      .eq('user_id', user.id);
+    
+    if (error) {
+      toast.error('Erro ao excluir lançamento');
+      return;
+    }
+    
     const key = getMonthKey(currentMonth);
     setMonthlyData(prev => ({
       ...prev,
@@ -101,10 +301,57 @@ export function useExpenseStore() {
         expenses: (prev[key]?.expenses || []).filter(e => e.id !== id),
       },
     }));
-  }, [currentMonth]);
+    
+    toast.success('Lançamento excluído!');
+  }, [user, currentMonth]);
 
-  const setRentalIncome = useCallback((income: RentalIncome) => {
+  const setRentalIncome = useCallback(async (income: RentalIncome) => {
+    if (!user) return;
+    
     const key = getMonthKey(currentMonth);
+    
+    const { data: existing } = await supabase
+      .from('rental_income')
+      .select('id')
+      .eq('user_id', user.id)
+      .eq('month_key', key)
+      .maybeSingle();
+    
+    if (existing) {
+      const { error } = await supabase
+        .from('rental_income')
+        .update({
+          name: income.name,
+          value: income.value,
+          is_active: income.isActive,
+          contract_duration: income.contractDuration,
+          contract_start_date: income.contractStartDate
+        })
+        .eq('id', existing.id);
+      
+      if (error) {
+        toast.error('Erro ao atualizar receita de aluguel');
+        return;
+      }
+    } else {
+      const { error } = await supabase
+        .from('rental_income')
+        .insert({
+          user_id: user.id,
+          month_key: key,
+          name: income.name,
+          value: income.value,
+          is_active: income.isActive,
+          contract_duration: income.contractDuration,
+          contract_start_date: income.contractStartDate
+        });
+      
+      if (error) {
+        toast.error('Erro ao salvar receita de aluguel');
+        return;
+      }
+    }
+    
     setMonthlyData(prev => ({
       ...prev,
       [key]: {
@@ -112,7 +359,7 @@ export function useExpenseStore() {
         rentalIncome: income,
       },
     }));
-  }, [currentMonth]);
+  }, [user, currentMonth]);
 
   const calculateTotalExpenses = useCallback(() => {
     return expenses.reduce((sum, exp) => sum + exp.value, 0);
@@ -142,20 +389,18 @@ export function useExpenseStore() {
   const calculateProjections = useCallback((year?: number) => {
     const projections = [];
     const targetYear = year || selectedYear;
-    const startDate = new Date(targetYear, 0, 1); // Janeiro do ano selecionado
+    const startDate = new Date(targetYear, 0, 1);
 
-    for (let i = 0; i < 12; i++) { // Sempre 12 meses: Janeiro a Dezembro
+    for (let i = 0; i < 12; i++) {
       const projectionDate = new Date(startDate);
       projectionDate.setMonth(i);
       const monthKey = getMonthKey(projectionDate);
       const monthData = monthlyData[monthKey] || createDefaultMonthData();
 
-      // Calculate total expenses and revenues based on transaction types
       let totalExpenses = 0;
       let totalRevenue = 0;
 
       monthData.expenses.forEach(expense => {
-        // Check if transaction should be included based on start date
         let shouldInclude = true;
         if (expense.startDate) {
           const transactionStartDate = new Date(expense.startDate + '-01');
@@ -173,7 +418,6 @@ export function useExpenseStore() {
         }
       });
 
-      // Also include legacy rental income (if still configured)
       const rentalIncomeData = monthData.rentalIncome;
       if (rentalIncomeData.isActive && rentalIncomeData.value > 0) {
         if (rentalIncomeData.contractDuration && rentalIncomeData.contractStartDate) {
@@ -190,7 +434,7 @@ export function useExpenseStore() {
       }
 
       projections.push({
-        month: format(projectionDate, 'MMM'), // Só mês, sem ano
+        month: format(projectionDate, 'MMM'),
         expenses: totalExpenses,
         revenue: totalRevenue,
         date: projectionDate,
@@ -216,5 +460,6 @@ export function useExpenseStore() {
     calculateTotalExpenses,
     calculateOwnerBalances,
     calculateProjections,
+    loading,
   };
 }
